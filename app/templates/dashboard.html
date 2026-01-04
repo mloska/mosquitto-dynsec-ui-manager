@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Mosquitto DynSec UI Manager</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/ui/dashboard">
+                <i class="bi bi-shield-lock"></i> Mosquitto DynSec UI Manager
+            </a>
+            <div class="d-flex">
+                <a href="/docs" class="btn btn-outline-light btn-sm me-2" target="_blank">
+                    <i class="bi bi-book"></i> API Docs
+                </a>
+                <a href="/ui/logout" class="btn btn-outline-light btn-sm">
+                    <i class="bi bi-box-arrow-right"></i> Logout
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        <!-- Alert for notifications -->
+        <div id="alertContainer"></div>
+
+        <!-- Tabs -->
+        <ul class="nav nav-tabs" id="mainTabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="clients-tab" data-bs-toggle="tab" data-bs-target="#clients" type="button" role="tab">
+                    <i class="bi bi-people"></i> Clients
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="roles-tab" data-bs-toggle="tab" data-bs-target="#roles" type="button" role="tab">
+                    <i class="bi bi-key"></i> Roles
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="groups-tab" data-bs-toggle="tab" data-bs-target="#groups" type="button" role="tab">
+                    <i class="bi bi-collection"></i> Groups
+                </button>
+            </li>
+        </ul>
+
+        <!-- Tab Content -->
+        <div class="tab-content" id="mainTabContent">
+            <!-- Clients Tab -->
+            <div class="tab-pane fade show active" id="clients" role="tabpanel">
+                <div class="card mt-3">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="bi bi-people"></i> MQTT Clients</h5>
+                        <button class="btn btn-primary btn-sm" onclick="showCreateClientModal()">
+                            <i class="bi bi-plus-circle"></i> Create Client
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover" id="clientsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Username</th>
+                                        <th>Groups</th>
+                                        <th>Roles</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="clientsTableBody">
+                                    <tr><td colspan="4" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Roles Tab -->
+            <div class="tab-pane fade" id="roles" role="tabpanel">
+                <div class="card mt-3">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="bi bi-key"></i> Roles</h5>
+                        <button class="btn btn-primary btn-sm" onclick="showCreateRoleModal()">
+                            <i class="bi bi-plus-circle"></i> Create Role
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover" id="rolesTable">
+                                <thead>
+                                    <tr>
+                                        <th>Role Name</th>
+                                        <th>ACLs</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="rolesTableBody">
+                                    <tr><td colspan="3" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Groups Tab -->
+            <div class="tab-pane fade" id="groups" role="tabpanel">
+                <div class="card mt-3">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="bi bi-collection"></i> Groups</h5>
+                        <button class="btn btn-primary btn-sm" onclick="showCreateGroupModal()">
+                            <i class="bi bi-plus-circle"></i> Create Group
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover" id="groupsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Group Name</th>
+                                        <th>Clients</th>
+                                        <th>Roles</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="groupsTableBody">
+                                    <tr><td colspan="4" class="text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Client Modal -->
+    <div class="modal fade" id="createClientModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-person-plus"></i> Create Client</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="createClientForm">
+                        <div class="mb-3">
+                            <label for="clientUsername" class="form-label">Username *</label>
+                            <input type="text" class="form-control" id="clientUsername" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="clientPassword" class="form-label">Password *</label>
+                            <input type="password" class="form-control" id="clientPassword" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="clientGroups" class="form-label">Groups (comma-separated)</label>
+                            <input type="text" class="form-control" id="clientGroups" placeholder="e.g., group1, group2">
+                        </div>
+                        <div class="mb-3">
+                            <label for="clientRoles" class="form-label">Roles (comma-separated)</label>
+                            <input type="text" class="form-control" id="clientRoles" placeholder="e.g., role1, role2">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="createClient()">Create</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Role Modal -->
+    <div class="modal fade" id="createRoleModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-key"></i> Create Role</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="createRoleForm">
+                        <div class="mb-3">
+                            <label for="roleName" class="form-label">Role Name *</label>
+                            <input type="text" class="form-control" id="roleName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">ACLs</label>
+                            <div id="aclContainer">
+                                <div class="acl-item mb-2 p-3 border rounded">
+                                    <div class="row">
+                                        <div class="col-md-3">
+                                            <select class="form-select form-select-sm" name="aclType">
+                                                <option value="publishClientSend">Publish</option>
+                                                <option value="subscribeLiteral">Subscribe</option>
+                                                <option value="unsubscribeLiteral">Unsubscribe</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <input type="text" class="form-control form-control-sm" name="aclTopic" placeholder="Topic (e.g., sensors/# or device/+/data)">
+                                        </div>
+                                        <div class="col-md-3">
+                                            <select class="form-select form-select-sm" name="aclAllow">
+                                                <option value="true">Allow</option>
+                                                <option value="false">Deny</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="addAclField()">
+                                <i class="bi bi-plus"></i> Add ACL
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="createRole()">Create</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Group Modal -->
+    <div class="modal fade" id="createGroupModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-collection"></i> Create Group</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="createGroupForm">
+                        <div class="mb-3">
+                            <label for="groupName" class="form-label">Group Name *</label>
+                            <input type="text" class="form-control" id="groupName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="groupRoles" class="form-label">Roles (comma-separated)</label>
+                            <input type="text" class="form-control" id="groupRoles" placeholder="e.g., role1, role2">
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="createGroup()">Create</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const AUTH_TOKEN = "{{ auth_token }}";
+        const API_BASE = "{{ api_base }}";
+        
+        // Helper to get auth headers
+        function getAuthHeaders() {
+            const [username, password] = atob(AUTH_TOKEN).split(':');
+            return {
+                'Authorization': 'Basic ' + AUTH_TOKEN,
+                'Content-Type': 'application/json'
+            };
+        }
+
+        // Show alert
+        function showAlert(message, type = 'success') {
+            const alertHtml = `
+                <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+                    ${message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            `;
+            document.getElementById('alertContainer').innerHTML = alertHtml;
+            setTimeout(() => {
+                const alert = document.querySelector('.alert');
+                if (alert) alert.remove();
+            }, 5000);
+        }
+
+        // Load Clients
+        async function loadClients() {
+            try {
+                const response = await fetch(`${API_BASE}/clients`, {
+                    headers: getAuthHeaders()
+                });
+                const data = await response.json();
+                
+                const tbody = document.getElementById('clientsTableBody');
+                if (Array.isArray(data) && data.length > 0) {
+                    tbody.innerHTML = data.map(client => `
+                        <tr>
+                            <td><strong>${client.username}</strong></td>
+                            <td>${client.groups ? client.groups.map(g => `<span class="badge bg-info">${g.groupname}</span>`).join(' ') : '-'}</td>
+                            <td>${client.roles ? client.roles.map(r => `<span class="badge bg-secondary">${r.rolename}</span>`).join(' ') : '-'}</td>
+                            <td>
+                                <button class="btn btn-sm btn-danger" onclick="deleteClient('${client.username}')">
+                                    <i class="bi bi-trash"></i> Delete
+                                </button>
+                            </td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="4" class="text-center">No clients found</td></tr>';
+                }
+            } catch (error) {
+                console.error('Error loading clients:', error);
+                showAlert('Failed to load clients', 'danger');
+            }
+        }
+
+        // Load Roles
+        async function loadRoles() {
+            try {
+                const response = await fetch(`${API_BASE}/roles`, {
+                    headers: getAuthHeaders()
+                });
+                const data = await response.json();
+                
+                const tbody = document.getElementById('rolesTableBody');
+                if (Array.isArray(data) && data.length > 0) {
+                    tbody.innerHTML = data.map(role => `
+                        <tr>
+                            <td><strong>${role.rolename}</strong></td>
+                            <td>
+                                ${role.acls ? role.acls.map(acl => 
+                                    `<small class="d-block">${Object.keys(acl)[0]}: ${Object.values(acl)[0]}</small>`
+                                ).join('') : '-'}
+                            </td>
+                            <td>
+                                <button class="btn btn-sm btn-danger" onclick="deleteRole('${role.rolename}')">
+                                    <i class="bi bi-trash"></i> Delete
+                                </button>
+                            </td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="3" class="text-center">No roles found</td></tr>';
+                }
+            } catch (error) {
+                console.error('Error loading roles:', error);
+                showAlert('Failed to load roles', 'danger');
+            }
+        }
+
+        // Load Groups
+        async function loadGroups() {
+            try {
+                const response = await fetch(`${API_BASE}/groups`, {
+                    headers: getAuthHeaders()
+                });
+                const data = await response.json();
+                
+                const tbody = document.getElementById('groupsTableBody');
+                if (Array.isArray(data) && data.length > 0) {
+                    tbody.innerHTML = data.map(group => `
+                        <tr>
+                            <td><strong>${group.groupname}</strong></td>
+                            <td>${group.clients ? group.clients.map(c => `<span class="badge bg-info">${c.username}</span>`).join(' ') : '-'}</td>
+                            <td>${group.roles ? group.roles.map(r => `<span class="badge bg-secondary">${r.rolename}</span>`).join(' ') : '-'}</td>
+                            <td>
+                                <button class="btn btn-sm btn-danger" onclick="deleteGroup('${group.groupname}')">
+                                    <i class="bi bi-trash"></i> Delete
+                                </button>
+                            </td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="4" class="text-center">No groups found</td></tr>';
+                }
+            } catch (error) {
+                console.error('Error loading groups:', error);
+                showAlert('Failed to load groups', 'danger');
+            }
+        }
+
+        // Create Client
+        function showCreateClientModal() {
+            new bootstrap.Modal(document.getElementById('createClientModal')).show();
+        }
+
+        // Helper function to extract error message
+        function getErrorMessage(errorResponse) {
+            if (typeof errorResponse === 'string') {
+                return errorResponse;
+            }
+            
+            // Handle Pydantic validation errors
+            if (Array.isArray(errorResponse.detail)) {
+                const messages = errorResponse.detail.map(err => {
+                    const field = Array.isArray(err.loc) ? err.loc.join('.') : '';
+                    return `${field || 'Error'}: ${err.msg}`;
+                });
+                return messages.join('; ');
+            }
+            
+            // Handle simple string detail
+            if (typeof errorResponse.detail === 'string') {
+                return errorResponse.detail;
+            }
+            
+            // Fallback
+            return JSON.stringify(errorResponse);
+        }
+
+        async function createClient() {
+            const username = document.getElementById('clientUsername').value;
+            const password = document.getElementById('clientPassword').value;
+            const groups = document.getElementById('clientGroups').value.split(',').map(s => s.trim()).filter(s => s);
+            const roles = document.getElementById('clientRoles').value.split(',').map(s => s.trim()).filter(s => s);
+
+            try {
+                const response = await fetch(`${API_BASE}/clients`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ username, password, groups, roles })
+                });
+
+                if (response.ok) {
+                    showAlert('Client created successfully', 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('createClientModal')).hide();
+                    document.getElementById('createClientForm').reset();
+                    loadClients();
+                } else {
+                    const error = await response.json();
+                    const message = getErrorMessage(error);
+                    showAlert(`Failed to create client: ${message}`, 'danger');
+                }
+            } catch (error) {
+                showAlert('Error creating client', 'danger');
+            }
+        }
+
+        // Delete Client
+        async function deleteClient(username) {
+            if (!confirm(`Delete client "${username}"?`)) return;
+
+            try {
+                const response = await fetch(`${API_BASE}/clients/${username}`, {
+                    method: 'DELETE',
+                    headers: getAuthHeaders()
+                });
+
+                if (response.ok) {
+                    showAlert('Client deleted successfully', 'success');
+                    loadClients();
+                } else {
+                    showAlert('Failed to delete client', 'danger');
+                }
+            } catch (error) {
+                showAlert('Error deleting client', 'danger');
+            }
+        }
+
+        // Create Role
+        function showCreateRoleModal() {
+            new bootstrap.Modal(document.getElementById('createRoleModal')).show();
+        }
+
+        function addAclField() {
+            const container = document.getElementById('aclContainer');
+            const newAcl = document.createElement('div');
+            newAcl.className = 'acl-item mb-2 p-3 border rounded';
+            newAcl.innerHTML = `
+                <div class="row">
+                    <div class="col-md-3">
+                        <select class="form-select form-select-sm" name="aclType">
+                            <option value="publishClientSend">Publish</option>
+                            <option value="subscribeLiteral">Subscribe</option>
+                            <option value="unsubscribeLiteral">Unsubscribe</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <input type="text" class="form-control form-control-sm" name="aclTopic" placeholder="Topic">
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select form-select-sm" name="aclAllow">
+                            <option value="true">Allow</option>
+                            <option value="false">Deny</option>
+                        </select>
+                    </div>
+                    <div class="col-md-1">
+                        <button type="button" class="btn btn-sm btn-danger" onclick="this.parentElement.parentElement.parentElement.remove()">
+                            <i class="bi bi-x"></i>
+                        </button>
+                    </div>
+                </div>
+            `;
+            container.appendChild(newAcl);
+        }
+
+        async function createRole() {
+            const rolename = document.getElementById('roleName').value;
+            const aclItems = document.querySelectorAll('.acl-item');
+            const acls = [];
+
+            aclItems.forEach(item => {
+                const type = item.querySelector('[name="aclType"]').value;
+                const topic = item.querySelector('[name="aclTopic"]').value;
+                const allow = item.querySelector('[name="aclAllow"]').value === 'true';
+
+                if (topic) {
+                    const acl = { acltype: type, allow };
+                    if (type === 'publishClientSend') {
+                        acl.topic = topic;
+                    } else {
+                        acl.topic = topic;
+                    }
+                    acls.push(acl);
+                }
+            });
+
+            try {
+                const response = await fetch(`${API_BASE}/roles`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ rolename, acls })
+                });
+
+                if (response.ok) {
+                    showAlert('Role created successfully', 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('createRoleModal')).hide();
+                    document.getElementById('createRoleForm').reset();
+                    loadRoles();
+                } else {
+                    const error = await response.json();
+                    const message = getErrorMessage(error);
+                    showAlert(`Failed to create role: ${message}`, 'danger');
+                }
+            } catch (error) {
+                showAlert('Error creating role', 'danger');
+            }
+        }
+
+        // Delete Role
+        async function deleteRole(rolename) {
+            if (!confirm(`Delete role "${rolename}"?`)) return;
+
+            try {
+                const response = await fetch(`${API_BASE}/roles/${rolename}`, {
+                    method: 'DELETE',
+                    headers: getAuthHeaders()
+                });
+
+                if (response.ok) {
+                    showAlert('Role deleted successfully', 'success');
+                    loadRoles();
+                } else {
+                    showAlert('Failed to delete role', 'danger');
+                }
+            } catch (error) {
+                showAlert('Error deleting role', 'danger');
+            }
+        }
+
+        // Create Group
+        function showCreateGroupModal() {
+            new bootstrap.Modal(document.getElementById('createGroupModal')).show();
+        }
+
+        async function createGroup() {
+            const groupname = document.getElementById('groupName').value;
+            const roles = document.getElementById('groupRoles').value.split(',').map(s => s.trim()).filter(s => s);
+
+            try {
+                const response = await fetch(`${API_BASE}/groups`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ groupname, roles })
+                });
+
+                if (response.ok) {
+                    showAlert('Group created successfully', 'success');
+                    bootstrap.Modal.getInstance(document.getElementById('createGroupModal')).hide();
+                    document.getElementById('createGroupForm').reset();
+                    loadGroups();
+                } else {
+                    const error = await response.json();
+                    const message = getErrorMessage(error);
+                    showAlert(`Failed to create group: ${message}`, 'danger');
+                }
+            } catch (error) {
+                showAlert('Error creating group', 'danger');
+            }
+        }
+
+        // Delete Group
+        async function deleteGroup(groupname) {
+            if (!confirm(`Delete group "${groupname}"?`)) return;
+
+            try {
+                const response = await fetch(`${API_BASE}/groups/${groupname}`, {
+                    method: 'DELETE',
+                    headers: getAuthHeaders()
+                });
+
+                if (response.ok) {
+                    showAlert('Group deleted successfully', 'success');
+                    loadGroups();
+                } else {
+                    showAlert('Failed to delete group', 'danger');
+                }
+            } catch (error) {
+                showAlert('Error deleting group', 'danger');
+            }
+        }
+
+        // Tab change handler
+        document.querySelectorAll('button[data-bs-toggle="tab"]').forEach(tab => {
+            tab.addEventListener('shown.bs.tab', event => {
+                const target = event.target.getAttribute('data-bs-target');
+                if (target === '#clients') loadClients();
+                else if (target === '#roles') loadRoles();
+                else if (target === '#groups') loadGroups();
+            });
+        });
+
+        // Initial load
+        loadClients();
+    </script>
+    <footer class="app-footer">
+        &copy; mloska v1.0.0
+    </footer>
+</body>
+</html>

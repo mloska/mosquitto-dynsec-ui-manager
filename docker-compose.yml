@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  # Mosquitto MQTT Broker with Dynamic Security
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: mosquitto
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    restart: unless-stopped
+    networks:
+      - mqtt-network
+
+  # Mosquitto DynSec UI Manager API
+  mosquitto-manager:
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+    container_name: mosquitto-manager
+    ports:
+      - "8000:8000"
+    environment:
+      # API Authentication (CHANGE IN PRODUCTION!)
+      - API_USERNAME=${API_USERNAME:-admin}
+      - API_PASSWORD=${API_PASSWORD:-admin}
+      
+      # Mosquitto Connection
+      - MOSQUITTO_HOST=${MOSQUITTO_HOST:-mosquitto}
+      - MOSQUITTO_PORT=${MOSQUITTO_PORT:-1883}
+      
+      # Mosquitto Admin Credentials (for mosquitto_ctrl)
+      - MOSQUITTO_ADMIN_USERNAME=${MOSQUITTO_ADMIN_USERNAME:-admin}
+      - MOSQUITTO_ADMIN_PASSWORD=${MOSQUITTO_ADMIN_PASSWORD:-test123}
+    depends_on:
+      - mosquitto
+    restart: unless-stopped
+    networks:
+      - mqtt-network
+
+networks:
+  mqtt-network:
+    driver: bridge
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:
