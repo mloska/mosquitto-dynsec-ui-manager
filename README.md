@@ -15,7 +15,7 @@ This repo provides a lightweight API plus a minimal web interface so you can man
 
 ### Screenshots
 
-![Dashboard](docs/images/img1.png)
+<img src="docs/images/img1.png" width="50%" alt="Dashboard">
 
 ![Management Interface](docs/images/img2.png)
 
