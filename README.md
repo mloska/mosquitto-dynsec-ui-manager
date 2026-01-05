@@ -102,10 +102,34 @@ curl -u admin:admin -X POST http://localhost:8000/api/clients/sensor01/roles \
   -d '{"role_name":"sensors","priority":1}'
 ```
 
+## TLS/SSL Support
+
+The API supports both plain MQTT (port 1883) and encrypted MQTT over TLS (port 8883).
+
+### TLS Configuration
+
+If you're using port 8883 or need TLS certificates, set these environment variables:
+
+```bash
+export MOSQUITTO_CAFILE=/path/to/ca.crt          # CA certificate
+export MOSQUITTO_CERTFILE=/path/to/client.crt    # Client certificate
+export MOSQUITTO_KEYFILE=/path/to/client.key     # Client private key
+export MOSQUITTO_INSECURE=false                  # Set to "true" to skip certificate verification (not recommended)
+```
+
+Then use port 8883 in your API calls — TLS is automatically enabled for that port:
+
+```bash
+curl -u admin:admin http://localhost:8000/api/clients?host=broker.example.com&port=8883
+```
+
+For detailed TLS setup and examples, see [TLS_8883_USAGE.md](no_publish/TLS_8883_USAGE.md).
+
 ## Notes and tips
 
 - Use strong passwords and do not leave the default `admin/admin` in production.
 - Consider putting the API behind TLS (nginx/Traefik) when exposing it to the internet.
+- For production MQTT deployments, always use port 8883 with valid TLS certificates.
 - The dynamic security JSON is the single source of truth; back it up regularly.
 - Priority numbers: lower means higher priority. `-1` is effectively admin.
 

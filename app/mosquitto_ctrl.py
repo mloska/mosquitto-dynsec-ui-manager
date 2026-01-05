@@ -247,22 +247,69 @@ def parse_group_details(output: str, group_name: str) -> Dict[str, Any]:
     return group_info
 
 # Mosquitto Dynamic Security Control Configuration
-def get_dynsec_base_command(server_ip: Optional[str], port: int = 1883) -> List[str]:
-    """Get base mosquitto_ctrl command for specific server (server_ip is required)."""
+def get_dynsec_base_command(
+    server_ip: Optional[str],
+    port: int = 1883,
+    use_tls: bool = False,
+    cafile: Optional[str] = None,
+    certfile: Optional[str] = None,
+    keyfile: Optional[str] = None,
+    insecure: bool = False
+) -> List[str]:
+    """
+    Get base mosquitto_ctrl command for specific server (server_ip is required).
+    
+    Args:
+        server_ip: Server IP address or hostname
+        port: MQTT port (default 1883 for plain, 8883 for TLS)
+        use_tls: Enable TLS/SSL (auto-enabled if port is 8883)
+        cafile: Path to CA certificate file for TLS
+        certfile: Path to client certificate file for TLS
+        keyfile: Path to client key file for TLS
+        insecure: Disable certificate verification (not recommended for production)
+    """
     if not server_ip:
         raise ValueError("server_ip is required (no default).")
+    
+    # Auto-enable TLS if port is 8883
+    if port == 8883:
+        use_tls = True
     
     # Get credentials from environment variables
     username = os.getenv("MOSQUITTO_ADMIN_USERNAME", "admin")
     password = os.getenv("MOSQUITTO_ADMIN_PASSWORD", "passadmin")
     
-    return [
+    # Get TLS settings from environment variables if not explicitly provided
+    if use_tls and not cafile:
+        cafile = os.getenv("MOSQUITTO_CAFILE", None)
+    if use_tls and not certfile:
+        certfile = os.getenv("MOSQUITTO_CERTFILE", None)
+    if use_tls and not keyfile:
+        keyfile = os.getenv("MOSQUITTO_KEYFILE", None)
+    if not insecure:
+        insecure = os.getenv("MOSQUITTO_INSECURE", "false").lower() == "true"
+    
+    command = [
         "mosquitto_ctrl",
         "-h", server_ip,
         "-p", str(port),
         "-u", username,
         "-P", password
     ]
+    
+    # Add TLS options if enabled
+    if use_tls:
+        if cafile:
+            command.extend(["--cafile", cafile])
+        if certfile:
+            command.extend(["--cert", certfile])
+        if keyfile:
+            command.extend(["--key", keyfile])
+        if insecure:
+            command.append("--insecure")
+            logger.warning("TLS certificate verification disabled (--insecure). Not recommended for production.")
+    
+    return command
 
 def check_mosquitto_ctrl_available() -> bool:
     """Check if mosquitto_ctrl command is available in the system"""
@@ -285,9 +332,27 @@ def execute_mosquitto_command(
     command: List[str],
     server_ip: Optional[str],
     port: int = 1883,
-    input_data: Optional[str] = None
+    input_data: Optional[str] = None,
+    use_tls: bool = False,
+    cafile: Optional[str] = None,
+    certfile: Optional[str] = None,
+    keyfile: Optional[str] = None,
+    insecure: bool = False
 ) -> Tuple[bool, str]:
-    """Execute mosquitto_ctrl command and return success status and output"""
+    """
+    Execute mosquitto_ctrl command and return success status and output
+    
+    Args:
+        command: mosquitto_ctrl command arguments (e.g., ["dynsec", "listClients"])
+        server_ip: MQTT broker IP/hostname
+        port: MQTT broker port (1883 or 8883)
+        input_data: Optional stdin data
+        use_tls: Enable TLS/SSL (auto-enabled if port is 8883)
+        cafile: Path to CA certificate file
+        certfile: Path to client certificate file
+        keyfile: Path to client key file
+        insecure: Disable certificate verification
+    """
     if not check_mosquitto_ctrl_available():
         logger.error("mosquitto_ctrl is not available in this environment - make sure mosquitto-clients package is installed")
         return False, "mosquitto_ctrl command not found - install mosquitto-clients package"
@@ -296,7 +361,7 @@ def execute_mosquitto_command(
         logger.error(msg)
         return False, msg
     try:
-        base_command = get_dynsec_base_command(server_ip, port)
+        base_command = get_dynsec_base_command(server_ip, port, use_tls, cafile, certfile, keyfile, insecure)
         full_command = base_command + command
         # Enhanced structured logging (hide password in logs)
         cmd_display = [x if x != base_command[-1] else "****" for x in full_command]
@@ -322,6 +387,8 @@ def execute_mosquitto_command(
                 error_msg = f"Cannot connect to Mosquitto at {server_ip}:{port}. Check if broker is running and accessible."
             elif "authentication failed" in error_msg.lower() or "permission denied" in error_msg.lower():
                 error_msg = f"Authentication failed for user 'admin'. Check MOSQUITTO_ADMIN_USERNAME and MOSQUITTO_ADMIN_PASSWORD environment variables."
+            elif "certificate" in error_msg.lower() or "tls" in error_msg.lower() or "ssl" in error_msg.lower():
+                error_msg = f"TLS/SSL error connecting to {server_ip}:{port}. Check certificate settings."
             return False, error_msg
     except subprocess.TimeoutExpired:
         logger.error(f"mosquitto_ctrl command timed out connecting to {server_ip}:{port}")
@@ -333,9 +400,9 @@ def execute_mosquitto_command(
         logger.error(f"Error executing mosquitto_ctrl command: {str(e)}")
         return False, f"Error: {str(e)}"
 
-def get_dynsec_clients_via_mosquitto(server_ip: Optional[str], port: int = 1883) -> Tuple[bool, list]:
+def get_dynsec_clients_via_mosquitto(server_ip: Optional[str], port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, list]:
     # Removed duplicate server_ip check (handled in execute)
-    success, output = execute_mosquitto_command(["dynsec", "listClients"], server_ip, port)
+    success, output = execute_mosquitto_command(["dynsec", "listClients"], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
     if success:
         try:
             return True, parse_client_list(output)
@@ -343,8 +410,8 @@ def get_dynsec_clients_via_mosquitto(server_ip: Optional[str], port: int = 1883)
             logger.error("Failed to parse client list: %s", e)
     return False, []
 
-def get_dynsec_roles_via_mosquitto(server_ip: Optional[str], port: int = 1883) -> Tuple[bool, list]:
-    success, output = execute_mosquitto_command(["dynsec", "listRoles"], server_ip, port)
+def get_dynsec_roles_via_mosquitto(server_ip: Optional[str], port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, list]:
+    success, output = execute_mosquitto_command(["dynsec", "listRoles"], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
     if success:
         try:
             return True, parse_role_list(output)
@@ -352,8 +419,8 @@ def get_dynsec_roles_via_mosquitto(server_ip: Optional[str], port: int = 1883) -
             logger.error("Failed to parse role list: %s", e)
     return False, []
 
-def get_dynsec_groups_via_mosquitto(server_ip: Optional[str], port: int = 1883) -> Tuple[bool, list]:
-    success, output = execute_mosquitto_command(["dynsec", "listGroups"], server_ip, port)
+def get_dynsec_groups_via_mosquitto(server_ip: Optional[str], port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, list]:
+    success, output = execute_mosquitto_command(["dynsec", "listGroups"], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
     if success:
         try:
             return True, parse_group_list(output)
@@ -361,8 +428,8 @@ def get_dynsec_groups_via_mosquitto(server_ip: Optional[str], port: int = 1883) 
             logger.error("Failed to parse group list: %s", e)
     return False, []
 
-def get_dynsec_default_acl_via_mosquitto(server_ip: Optional[str], port: int = 1883) -> Tuple[bool, dict]:
-    success, output = execute_mosquitto_command(["dynsec", "getDefaultACLAccess"], server_ip, port)
+def get_dynsec_default_acl_via_mosquitto(server_ip: Optional[str], port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, dict]:
+    success, output = execute_mosquitto_command(["dynsec", "getDefaultACLAccess"], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
     if success:
         try:
             return True, parse_default_acl(output)
@@ -371,28 +438,28 @@ def get_dynsec_default_acl_via_mosquitto(server_ip: Optional[str], port: int = 1
     return False, {}
 
 # Client Management Functions
-def create_client_via_mosquitto(server_ip: Optional[str], username: str, password: str, port: int = 1883) -> Tuple[bool, str]:
+def create_client_via_mosquitto(server_ip: Optional[str], username: str, password: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Create a new client via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
     # Create client
-    success, result = execute_mosquitto_command(["dynsec", "createClient", username], server_ip, port)
+    success, result = execute_mosquitto_command(["dynsec", "createClient", username], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
     if not success:
         return False, result
     
     # Set password
-    success, result = execute_mosquitto_command(["dynsec", "setClientPassword", username, password], server_ip, port)
+    success, result = execute_mosquitto_command(["dynsec", "setClientPassword", username, password], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
     if not success:
         # Cleanup created client if password setting fails
-        execute_mosquitto_command(["dynsec", "deleteClient", username], server_ip, port)
+        execute_mosquitto_command(["dynsec", "deleteClient", username], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
         return False, result
     
     return True, f"Client {username} created successfully"
 
-def get_client_via_mosquitto(server_ip: Optional[str], username: str, port: int = 1883) -> Tuple[bool, dict]:
-    success, output = execute_mosquitto_command(["dynsec", "getClient", username], server_ip, port)
+def get_client_via_mosquitto(server_ip: Optional[str], username: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, dict]:
+    success, output = execute_mosquitto_command(["dynsec", "getClient", username], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
     if not success:
         return False, {}
     try:
@@ -401,49 +468,49 @@ def get_client_via_mosquitto(server_ip: Optional[str], username: str, port: int 
         logger.error("Failed to parse client details: %s", e)
         return False, {}
 
-def enable_client_via_mosquitto(server_ip: Optional[str], username: str, port: int = 1883) -> Tuple[bool, str]:
+def enable_client_via_mosquitto(server_ip: Optional[str], username: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Enable a client via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "enableClient", username], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "enableClient", username], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
-def disable_client_via_mosquitto(server_ip: Optional[str], username: str, port: int = 1883) -> Tuple[bool, str]:
+def disable_client_via_mosquitto(server_ip: Optional[str], username: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Disable a client via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "disableClient", username], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "disableClient", username], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
-def delete_client_via_mosquitto(server_ip: Optional[str], username: str, port: int = 1883) -> Tuple[bool, str]:
+def delete_client_via_mosquitto(server_ip: Optional[str], username: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Delete a client via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "deleteClient", username], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "deleteClient", username], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
-def set_client_password_via_mosquitto(server_ip: Optional[str], username: str, password: str, port: int = 1883) -> Tuple[bool, str]:
+def set_client_password_via_mosquitto(server_ip: Optional[str], username: str, password: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Set client password via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "setClientPassword", username, password], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "setClientPassword", username, password], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
 # Role Management Functions
-def create_role_via_mosquitto(server_ip: Optional[str], role_name: str, port: int = 1883) -> Tuple[bool, str]:
+def create_role_via_mosquitto(server_ip: Optional[str], role_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Create a new role via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "createRole", role_name], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "createRole", role_name], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
-def get_role_via_mosquitto(server_ip: Optional[str], role_name: str, port: int = 1883) -> Tuple[bool, dict]:
-    success, output = execute_mosquitto_command(["dynsec", "getRole", role_name], server_ip, port)
+def get_role_via_mosquitto(server_ip: Optional[str], role_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, dict]:
+    success, output = execute_mosquitto_command(["dynsec", "getRole", role_name], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
     if not success:
         return False, {}
     try:
@@ -452,58 +519,58 @@ def get_role_via_mosquitto(server_ip: Optional[str], role_name: str, port: int =
         logger.error("Failed to parse role details: %s", e)
         return False, {}
 
-def delete_role_via_mosquitto(server_ip: Optional[str], role_name: str, port: int = 1883) -> Tuple[bool, str]:
+def delete_role_via_mosquitto(server_ip: Optional[str], role_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Delete a role via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "deleteRole", role_name], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "deleteRole", role_name], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
-def add_role_acl_via_mosquitto(server_ip: Optional[str], role_name: str, acl_type: str, topic: str, permission: str, port: int = 1883) -> Tuple[bool, str]:
+def add_role_acl_via_mosquitto(server_ip: Optional[str], role_name: str, acl_type: str, topic: str, permission: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Add an ACL to a role via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "addRoleACL", role_name, acl_type, topic, permission], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "addRoleACL", role_name, acl_type, topic, permission], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
-def remove_role_acl_via_mosquitto(server_ip: Optional[str], role_name: str, acl_type: str, topic: str, port: int = 1883) -> Tuple[bool, str]:
+def remove_role_acl_via_mosquitto(server_ip: Optional[str], role_name: str, acl_type: str, topic: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Remove an ACL from a role via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "removeRoleACL", role_name, acl_type, topic], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "removeRoleACL", role_name, acl_type, topic], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
 # Client-Role Management Functions
-def add_client_role_via_mosquitto(server_ip: Optional[str], username: str, role_name: str, priority: str = "1", port: int = 1883) -> Tuple[bool, str]:
+def add_client_role_via_mosquitto(server_ip: Optional[str], username: str, role_name: str, priority: str = "1", port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Add a role to a client via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "addClientRole", username, role_name, priority], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "addClientRole", username, role_name, priority], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
-def remove_client_role_via_mosquitto(server_ip: Optional[str], username: str, role_name: str, port: int = 1883) -> Tuple[bool, str]:
+def remove_client_role_via_mosquitto(server_ip: Optional[str], username: str, role_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Remove a role from a client via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "removeClientRole", username, role_name], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "removeClientRole", username, role_name], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
 # Group Management Functions  
-def create_group_via_mosquitto(server_ip: Optional[str], group_name: str, port: int = 1883) -> Tuple[bool, str]:
+def create_group_via_mosquitto(server_ip: Optional[str], group_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Create a new group via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "createGroup", group_name], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "createGroup", group_name], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
-def get_group_via_mosquitto(server_ip: Optional[str], group_name: str, port: int = 1883) -> Tuple[bool, dict]:
-    success, output = execute_mosquitto_command(["dynsec", "getGroup", group_name], server_ip, port)
+def get_group_via_mosquitto(server_ip: Optional[str], group_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, dict]:
+    success, output = execute_mosquitto_command(["dynsec", "getGroup", group_name], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
     if not success:
         return False, {}
     try:
@@ -512,45 +579,45 @@ def get_group_via_mosquitto(server_ip: Optional[str], group_name: str, port: int
         logger.error("Failed to parse group details: %s", e)
         return False, {}
 
-def delete_group_via_mosquitto(server_ip: Optional[str], group_name: str, port: int = 1883) -> Tuple[bool, str]:
+def delete_group_via_mosquitto(server_ip: Optional[str], group_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Delete a group via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "deleteGroup", group_name], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "deleteGroup", group_name], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
-def add_group_role_via_mosquitto(server_ip: Optional[str], group_name: str, role_name: str, port: int = 1883) -> Tuple[bool, str]:
+def add_group_role_via_mosquitto(server_ip: Optional[str], group_name: str, role_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Add a role to a group via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "addGroupRole", group_name, role_name], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "addGroupRole", group_name, role_name], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
-def remove_group_role_via_mosquitto(server_ip: Optional[str], group_name: str, role_name: str, port: int = 1883) -> Tuple[bool, str]:
+def remove_group_role_via_mosquitto(server_ip: Optional[str], group_name: str, role_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Remove a role from a group via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "removeGroupRole", group_name, role_name], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "removeGroupRole", group_name, role_name], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
-def add_group_client_via_mosquitto(server_ip: Optional[str], group_name: str, username: str, priority: str = "1", port: int = 1883) -> Tuple[bool, str]:
+def add_group_client_via_mosquitto(server_ip: Optional[str], group_name: str, username: str, priority: str = "1", port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Add a client to a group via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "addGroupClient", group_name, username, priority], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "addGroupClient", group_name, username, priority], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
-def remove_group_client_via_mosquitto(server_ip: Optional[str], group_name: str, username: str, port: int = 1883) -> Tuple[bool, str]:
+def remove_group_client_via_mosquitto(server_ip: Optional[str], group_name: str, username: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Remove a client from a group via mosquitto_ctrl"""
     if not server_ip:
         logger.error("server_ip is required but was not provided.")
         return False, "server_ip is required"
     
-    return execute_mosquitto_command(["dynsec", "removeGroupClient", group_name, username], server_ip, port)
+    return execute_mosquitto_command(["dynsec", "removeGroupClient", group_name, username], server_ip, port, None, use_tls, cafile, certfile, keyfile, insecure)
 
 # =====================================================
 # Wrapper Functions for Views 
@@ -558,87 +625,87 @@ def remove_group_client_via_mosquitto(server_ip: Optional[str], group_name: str,
 # =====================================================
 
 # Client Management
-def create_client(server_ip: str, username: str, password: str, textname: str = None, port: int = 1883) -> Tuple[bool, str]:
+def create_client(server_ip: str, username: str, password: str, textname: str = None, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Create a client with optional textname"""
-    success, message = create_client_via_mosquitto(server_ip, username, password, port)
+    success, message = create_client_via_mosquitto(server_ip, username, password, port, use_tls, cafile, certfile, keyfile, insecure)
     # If textname is provided and client creation succeeded, we'd need to modify it
     # However, mosquitto_ctrl doesn't have a direct way to set textname during creation
     # This would require a separate modify call which is not yet implemented in the base functions
     return success, message
 
-def get_client(server_ip: str, username: str, port: int = 1883) -> Tuple[bool, dict]:
+def get_client(server_ip: str, username: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, dict]:
     """Get client details"""
-    return get_client_via_mosquitto(server_ip, username, port)
+    return get_client_via_mosquitto(server_ip, username, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def list_clients(server_ip: str, port: int = 1883) -> Tuple[bool, list]:
+def list_clients(server_ip: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, list]:
     """List all clients"""
-    return get_dynsec_clients_via_mosquitto(server_ip, port)
+    return get_dynsec_clients_via_mosquitto(server_ip, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def modify_client(server_ip: str, username: str, textname: str = None, port: int = 1883) -> Tuple[bool, str]:
+def modify_client(server_ip: str, username: str, textname: str = None, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Modify client - currently only textname is supported"""
     # mosquitto_ctrl doesn't have a direct modify command for textname
     # This is a placeholder - would need to be implemented with actual mosquitto_ctrl commands
     return True, f"Client {username} modified (textname changes not yet supported)"
 
-def delete_client(server_ip: str, username: str, port: int = 1883) -> Tuple[bool, str]:
+def delete_client(server_ip: str, username: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Delete a client"""
-    return delete_client_via_mosquitto(server_ip, username, port)
+    return delete_client_via_mosquitto(server_ip, username, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def enable_client(server_ip: str, username: str, port: int = 1883) -> Tuple[bool, str]:
+def enable_client(server_ip: str, username: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Enable a client"""
-    return enable_client_via_mosquitto(server_ip, username, port)
+    return enable_client_via_mosquitto(server_ip, username, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def disable_client(server_ip: str, username: str, port: int = 1883) -> Tuple[bool, str]:
+def disable_client(server_ip: str, username: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Disable a client"""
-    return disable_client_via_mosquitto(server_ip, username, port)
+    return disable_client_via_mosquitto(server_ip, username, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def set_client_password(server_ip: str, username: str, password: str, port: int = 1883) -> Tuple[bool, str]:
+def set_client_password(server_ip: str, username: str, password: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Set client password"""
-    return set_client_password_via_mosquitto(server_ip, username, password, port)
+    return set_client_password_via_mosquitto(server_ip, username, password, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def add_client_role(server_ip: str, username: str, role_name: str, priority: int = 1, port: int = 1883) -> Tuple[bool, str]:
+def add_client_role(server_ip: str, username: str, role_name: str, priority: int = 1, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Add role to client"""
-    return add_client_role_via_mosquitto(server_ip, username, role_name, str(priority), port)
+    return add_client_role_via_mosquitto(server_ip, username, role_name, str(priority), port, use_tls, cafile, certfile, keyfile, insecure)
 
-def remove_client_role(server_ip: str, username: str, role_name: str, port: int = 1883) -> Tuple[bool, str]:
+def remove_client_role(server_ip: str, username: str, role_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Remove role from client"""
-    return remove_client_role_via_mosquitto(server_ip, username, role_name, port)
+    return remove_client_role_via_mosquitto(server_ip, username, role_name, port, use_tls, cafile, certfile, keyfile, insecure)
 
 # Role Management
-def create_role(server_ip: str, role_name: str, textname: str = None, port: int = 1883) -> Tuple[bool, str]:
+def create_role(server_ip: str, role_name: str, textname: str = None, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Create a role with optional textname"""
-    success, message = create_role_via_mosquitto(server_ip, role_name, port)
+    success, message = create_role_via_mosquitto(server_ip, role_name, port, use_tls, cafile, certfile, keyfile, insecure)
     # textname setting would require additional implementation
     return success, message
 
-def get_role(server_ip: str, role_name: str, port: int = 1883) -> Tuple[bool, dict]:
+def get_role(server_ip: str, role_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, dict]:
     """Get role details"""
-    return get_role_via_mosquitto(server_ip, role_name, port)
+    return get_role_via_mosquitto(server_ip, role_name, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def list_roles(server_ip: str, port: int = 1883) -> Tuple[bool, list]:
+def list_roles(server_ip: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, list]:
     """List all roles"""
-    return get_dynsec_roles_via_mosquitto(server_ip, port)
+    return get_dynsec_roles_via_mosquitto(server_ip, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def modify_role(server_ip: str, role_name: str, textname: str = None, port: int = 1883) -> Tuple[bool, str]:
+def modify_role(server_ip: str, role_name: str, textname: str = None, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Modify role - currently textname changes not supported"""
     return True, f"Role {role_name} modified (textname changes not yet supported)"
 
-def delete_role(server_ip: str, role_name: str, port: int = 1883) -> Tuple[bool, str]:
+def delete_role(server_ip: str, role_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Delete a role"""
-    return delete_role_via_mosquitto(server_ip, role_name, port)
+    return delete_role_via_mosquitto(server_ip, role_name, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def add_role_acl(server_ip: str, role_name: str, acl_type: str, topic: str, allow: bool = True, priority: int = 1, port: int = 1883) -> Tuple[bool, str]:
+def add_role_acl(server_ip: str, role_name: str, acl_type: str, topic: str, allow: bool = True, priority: int = 1, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Add ACL to role"""
     permission = "allow" if allow else "deny"
-    return add_role_acl_via_mosquitto(server_ip, role_name, acl_type, topic, permission, port)
+    return add_role_acl_via_mosquitto(server_ip, role_name, acl_type, topic, permission, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def remove_role_acl(server_ip: str, role_name: str, acl_type: str, topic: str, port: int = 1883) -> Tuple[bool, str]:
+def remove_role_acl(server_ip: str, role_name: str, acl_type: str, topic: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Remove ACL from role"""
-    return remove_role_acl_via_mosquitto(server_ip, role_name, acl_type, topic, port)
+    return remove_role_acl_via_mosquitto(server_ip, role_name, acl_type, topic, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def get_role_acls(server_ip: str, role_name: str, port: int = 1883) -> Tuple[bool, list]:
+def get_role_acls(server_ip: str, role_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, list]:
     """Get ACLs for a role with improved parsing and debug logging."""
-    success, role_data = get_role_via_mosquitto(server_ip, role_name, port)
+    success, role_data = get_role_via_mosquitto(server_ip, role_name, port, use_tls, cafile, certfile, keyfile, insecure)
     if success and isinstance(role_data, dict):
         acls = role_data.get('acls', [])
         if not acls:
@@ -649,49 +716,49 @@ def get_role_acls(server_ip: str, role_name: str, port: int = 1883) -> Tuple[boo
     return success, []
 
 # Group Management
-def create_group(server_ip: str, group_name: str, textname: str = None, port: int = 1883) -> Tuple[bool, str]:
+def create_group(server_ip: str, group_name: str, textname: str = None, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Create a group with optional textname"""
-    success, message = create_group_via_mosquitto(server_ip, group_name, port)
+    success, message = create_group_via_mosquitto(server_ip, group_name, port, use_tls, cafile, certfile, keyfile, insecure)
     # textname setting would require additional implementation
     return success, message
 
-def get_group(server_ip: str, group_name: str, port: int = 1883) -> Tuple[bool, dict]:
+def get_group(server_ip: str, group_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, dict]:
     """Get group details"""
-    return get_group_via_mosquitto(server_ip, group_name, port)
+    return get_group_via_mosquitto(server_ip, group_name, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def list_groups(server_ip: str, port: int = 1883) -> Tuple[bool, list]:
+def list_groups(server_ip: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, list]:
     """List all groups"""
-    return get_dynsec_groups_via_mosquitto(server_ip, port)
+    return get_dynsec_groups_via_mosquitto(server_ip, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def modify_group(server_ip: str, group_name: str, textname: str = None, port: int = 1883) -> Tuple[bool, str]:
+def modify_group(server_ip: str, group_name: str, textname: str = None, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Modify group - currently textname changes not supported"""
     return True, f"Group {group_name} modified (textname changes not yet supported)"
 
-def delete_group(server_ip: str, group_name: str, port: int = 1883) -> Tuple[bool, str]:
+def delete_group(server_ip: str, group_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Delete a group"""
-    return delete_group_via_mosquitto(server_ip, group_name, port)
+    return delete_group_via_mosquitto(server_ip, group_name, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def add_group_client(server_ip: str, group_name: str, username: str, priority: int = 1, port: int = 1883) -> Tuple[bool, str]:
+def add_group_client(server_ip: str, group_name: str, username: str, priority: int = 1, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Add client to group"""
-    return add_group_client_via_mosquitto(server_ip, group_name, username, str(priority), port)
+    return add_group_client_via_mosquitto(server_ip, group_name, username, str(priority), port, use_tls, cafile, certfile, keyfile, insecure)
 
-def remove_group_client(server_ip: str, group_name: str, username: str, port: int = 1883) -> Tuple[bool, str]:
+def remove_group_client(server_ip: str, group_name: str, username: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Remove client from group"""
-    return remove_group_client_via_mosquitto(server_ip, group_name, username, port)
+    return remove_group_client_via_mosquitto(server_ip, group_name, username, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def add_group_role(server_ip: str, group_name: str, role_name: str, priority: int = 1, port: int = 1883) -> Tuple[bool, str]:
+def add_group_role(server_ip: str, group_name: str, role_name: str, priority: int = 1, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Add role to group"""
-    return add_group_role_via_mosquitto(server_ip, group_name, role_name, port)
+    return add_group_role_via_mosquitto(server_ip, group_name, role_name, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def remove_group_role(server_ip: str, group_name: str, role_name: str, port: int = 1883) -> Tuple[bool, str]:
+def remove_group_role(server_ip: str, group_name: str, role_name: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Remove role from group"""
-    return remove_group_role_via_mosquitto(server_ip, group_name, role_name, port)
+    return remove_group_role_via_mosquitto(server_ip, group_name, role_name, port, use_tls, cafile, certfile, keyfile, insecure)
 
 # Default ACL Management
-def get_default_acl(server_ip: str, port: int = 1883) -> Tuple[bool, dict]:
+def get_default_acl(server_ip: str, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, dict]:
     """Get default ACL settings"""
-    return get_dynsec_default_acl_via_mosquitto(server_ip, port)
+    return get_dynsec_default_acl_via_mosquitto(server_ip, port, use_tls, cafile, certfile, keyfile, insecure)
 
-def set_default_acl(server_ip: str, acl_settings: dict, port: int = 1883) -> Tuple[bool, str]:
+def set_default_acl(server_ip: str, acl_settings: dict, port: int = 1883, use_tls: bool = False, cafile: Optional[str] = None, certfile: Optional[str] = None, keyfile: Optional[str] = None, insecure: bool = False) -> Tuple[bool, str]:
     """Set default ACL settings - would need implementation"""
     return False, "Setting default ACL not yet implemented"
